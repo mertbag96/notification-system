@@ -28,3 +28,5 @@ yarn-error.log
 /ASSESSMENT.md
 /PLAN.md
 /GUIDELINE.md
+.DS_Store
+postman.json
