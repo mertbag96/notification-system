@@ -35,4 +35,9 @@ return [
         ],
     ],
 
+    'webhook_site' => [
+        'url' => env('WEBHOOK_SITE_URL'),
+        'timeout' => (int) env('WEBHOOK_SITE_TIMEOUT', 5),
+    ],
+
 ];

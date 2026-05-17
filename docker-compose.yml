@@ -1,0 +1,112 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: docker/php/Dockerfile
+    image: notification-system/app:latest
+    container_name: notifications-app
+    environment:
+      APP_ENV: ${APP_ENV:-local}
+      APP_DEBUG: ${APP_DEBUG:-true}
+      DB_CONNECTION: mysql
+      DB_HOST: mysql
+      DB_PORT: 3306
+      DB_DATABASE: ${DB_DATABASE:-notifications}
+      DB_USERNAME: ${DB_USERNAME:-notifications}
+      DB_PASSWORD: ${DB_PASSWORD:-secret}
+      QUEUE_CONNECTION: database
+      CACHE_STORE: database
+      SESSION_DRIVER: database
+      WEBHOOK_SITE_URL: ${WEBHOOK_SITE_URL:-https://webhook.site/00000000-0000-0000-0000-000000000000}
+    depends_on:
+      mysql:
+        condition: service_healthy
+    volumes:
+      - .:/var/www/html
+    networks: [notifications]
+
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: notifications-nginx
+    ports:
+      - "${APP_PORT:-8080}:80"
+    volumes:
+      - .:/var/www/html:ro
+      - ./docker/nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - app
+    networks: [notifications]
+
+  mysql:
+    image: mysql:8.0
+    container_name: notifications-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:-rootsecret}
+      MYSQL_DATABASE: ${DB_DATABASE:-notifications}
+      MYSQL_USER: ${DB_USERNAME:-notifications}
+      MYSQL_PASSWORD: ${DB_PASSWORD:-secret}
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-uroot", "-p${DB_ROOT_PASSWORD:-rootsecret}"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+    volumes:
+      - mysql-data:/var/lib/mysql
+    networks: [notifications]
+
+  queue:
+    image: notification-system/app:latest
+    container_name: notifications-queue
+    command: >
+      php artisan queue:work
+      --queue=notifications-high,notifications-normal,notifications-low
+      --tries=5
+      --backoff=2,5,15,60,300
+      --max-time=3600
+    environment:
+      DB_CONNECTION: mysql
+      DB_HOST: mysql
+      DB_PORT: 3306
+      DB_DATABASE: ${DB_DATABASE:-notifications}
+      DB_USERNAME: ${DB_USERNAME:-notifications}
+      DB_PASSWORD: ${DB_PASSWORD:-secret}
+      QUEUE_CONNECTION: database
+      CACHE_STORE: database
+      WEBHOOK_SITE_URL: ${WEBHOOK_SITE_URL:-https://webhook.site/00000000-0000-0000-0000-000000000000}
+    depends_on:
+      app:
+        condition: service_started
+      mysql:
+        condition: service_healthy
+    volumes:
+      - .:/var/www/html
+    networks: [notifications]
+
+  scheduler:
+    image: notification-system/app:latest
+    container_name: notifications-scheduler
+    command: php artisan schedule:work
+    environment:
+      DB_CONNECTION: mysql
+      DB_HOST: mysql
+      DB_PORT: 3306
+      DB_DATABASE: ${DB_DATABASE:-notifications}
+      DB_USERNAME: ${DB_USERNAME:-notifications}
+      DB_PASSWORD: ${DB_PASSWORD:-secret}
+      QUEUE_CONNECTION: database
+      CACHE_STORE: database
+    depends_on:
+      app:
+        condition: service_started
+      mysql:
+        condition: service_healthy
+    volumes:
+      - .:/var/www/html
+    networks: [notifications]
+
+volumes:
+  mysql-data:
+
+networks:
+  notifications:
+    driver: bridge
