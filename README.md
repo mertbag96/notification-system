@@ -21,6 +21,7 @@ Built on **Laravel 11 / PHP 8.3** following a strict thin-controller + Action/Se
 - **Template system** with `{{variable}}` substitution.
 - **Observability**: correlation IDs (request → job → provider), structured JSON logs (`storage/logs/notifications-*.log`), real-time metrics endpoint (queue depth, success/failure rates, p50/p95/p99 latency).
 - **Health endpoint** with DB / cache / queue checks.
+- **Operations dashboard** at `/` — live health, queue depth, success/failure/latency metrics, and a filterable notifications list with a detail drawer.
 - **OpenAPI 3.1** spec + Swagger UI at `/api/docs`.
 - **Docker Compose** for one-command setup.
 - **GitHub Actions** CI (Pint + PHPUnit + migrations).
@@ -29,30 +30,50 @@ Built on **Laravel 11 / PHP 8.3** following a strict thin-controller + Action/Se
 
 ## Quick start
 
-### Option A — Laravel Herd / local
+### 1. Provision a webhook.site inbox (required, ~30 seconds)
+
+Open https://webhook.site, copy the unique URL it shows you (e.g. `https://webhook.site/abcd1234-…`), then click **Edit** on that inbox and set:
+
+| Field | Value |
+| --- | --- |
+| Status code | `202` |
+| Content type | `application/json` |
+| Body | `{"messageId":"msg-{{$randomUUID}}","status":"accepted","timestamp":"{{$timestamp}}"}` |
+
+This is the contract the provider expects in order to mark a notification as `sent`. The shared placeholder UUID in `.env.example` is rate-limited (HTTP 429), so notifications will not succeed until you replace it.
+
+### 2. Choose a runtime
+
+#### Option A — Laravel Herd / local PHP
 
 ```bash
 composer install
+npm install
 cp .env.example .env
+# Edit .env and set WEBHOOK_SITE_URL to your personal inbox from step 1
 php artisan key:generate
 php artisan migrate --no-interaction
+npm run build                       # or `npm run dev` for HMR
 php artisan test --compact          # run the test suite
 php artisan queue:work --queue=notifications-high,notifications-normal,notifications-low
 ```
 
-The app is served by Herd at `https://notification-system.test`.
+The app is served by Herd at `https://notification-system.test`. Open the dashboard at the root URL.
 
-### Option B — Docker Compose (one command)
+#### Option B — Docker Compose (one command)
 
 ```bash
+# Set your webhook.site URL once, then bring everything up
+export WEBHOOK_SITE_URL=https://webhook.site/your-uuid-here
 docker compose up -d --build
 ```
 
 Then open:
 
+- Dashboard: [http://localhost:8080/](http://localhost:8080/)
 - Swagger UI: [http://localhost:8080/api/docs](http://localhost:8080/api/docs)
-- Health: [http://localhost:8080/api/v1/health](http://localhost:8080/api/v1/health)
-- Metrics: [http://localhost:8080/api/v1/metrics](http://localhost:8080/api/v1/metrics)
+- Health: [http://localhost:8080/api/v1/health?api_key=local-development-key](http://localhost:8080/api/v1/health?api_key=local-development-key)
+- Metrics: [http://localhost:8080/api/v1/metrics?api_key=local-development-key](http://localhost:8080/api/v1/metrics?api_key=local-development-key)
 
 The `app`, `queue`, and `scheduler` containers all share the same image. MySQL data persists in the `mysql-data` volume.
 
@@ -62,19 +83,22 @@ The `app`, `queue`, and `scheduler` containers all share the same image. MySQL d
 
 Important environment variables (see `.env.example` for the full list):
 
-
-| Variable                             | Default                                  | Notes                                  |
-| ------------------------------------ | ---------------------------------------- | -------------------------------------- |
-| `WEBHOOK_SITE_URL`                   | *empty*                                  | Your `https://webhook.site/{uuid}` URL |
-| `WEBHOOK_SITE_TIMEOUT`               | `5`                                      | Seconds                                |
-| `NOTIFICATION_RATE_LIMIT_PER_SECOND` | `100`                                    | Per channel                            |
-| `NOTIFICATION_API_KEY`               | *empty in tests*                         | Sent as `X-Api-Key` header             |
-| `NOTIFICATION_IDEMPOTENCY_TTL_HOURS` | `24`                                     |                                        |
-| `NOTIFICATION_MAX_BATCH_SIZE`        | `1000`                                   |                                        |
-| `QUEUE_CONNECTION`                   | `database` (local) / `database` (Docker) | Swap to `redis` for production         |
-
+| Variable | Default in `.env.example` | Notes |
+| --- | --- | --- |
+| `WEBHOOK_SITE_URL` | `https://webhook.site/00000000-…` (placeholder) | Replace with your personal inbox URL — see Quick start |
+| `WEBHOOK_SITE_TIMEOUT` | `5` | Seconds |
+| `NOTIFICATION_RATE_LIMIT_PER_SECOND` | `100` | Per channel |
+| `NOTIFICATION_API_KEY` | `local-development-key` | Required as `X-Api-Key` header (or `?api_key=` query parameter for browser GETs). **Rotate for non-local environments.** |
+| `NOTIFICATION_IDEMPOTENCY_TTL_HOURS` | `24` | |
+| `NOTIFICATION_MAX_BATCH_SIZE` | `1000` | |
+| `NOTIFICATION_PROVIDER_429_MAX_ROUNDS` | `50` | Per-notification cap on consecutive HTTP 429 retries before marking `failed` |
+| `NOTIFICATION_PROVIDER_429_RETRY_DEFAULT` | `120` | Seconds to wait between 429 rounds when no `Retry-After` header is present |
+| `NOTIFICATION_PROVIDER_429_RETRY_CAP` | `3600` | Upper bound on honoured `Retry-After` values |
+| `QUEUE_CONNECTION` | `database` | Swap to `redis` for higher-throughput deployments |
 
 Tunables specific to the notification system live in `config/notifications.php`.
+
+> Tests override `NOTIFICATION_API_KEY` to empty via `phpunit.xml` so the suite can hit endpoints without authentication.
 
 ---
 
@@ -97,7 +121,7 @@ SendNotificationJob (per-priority queue)
      → Records NotificationAttempt + metrics + structured log
 ```
 
-Folder layout (strict per `PLAN.md`):
+Folder layout:
 
 ```
 app/
@@ -124,13 +148,14 @@ app/
 
 ## API examples
 
-> All endpoints accept the optional `X-Correlation-Id` and `Idempotency-Key` headers.
+The examples below assume Laravel Herd at `https://notification-system.test`. For Docker, substitute `http://localhost:8080`. All endpoints under `/api/v1` require the `X-Api-Key` header (or `?api_key=` query parameter on GET requests). `X-Correlation-Id` and `Idempotency-Key` are optional.
 
 ### Create a notification
 
 ```bash
 curl -X POST https://notification-system.test/api/v1/notifications \
   -H 'Content-Type: application/json' \
+  -H 'X-Api-Key: local-development-key' \
   -H 'Idempotency-Key: 8e1c4b7e-7a5c-4d8a-9bd1-1e8a2f3c4d5e' \
   -d '{
     "channel": "sms",
@@ -145,6 +170,7 @@ curl -X POST https://notification-system.test/api/v1/notifications \
 ```bash
 curl -X POST https://notification-system.test/api/v1/notifications/batch \
   -H 'Content-Type: application/json' \
+  -H 'X-Api-Key: local-development-key' \
   -d '{
     "notifications": [
       {"channel": "sms",   "recipient": "+14155550100", "content": "A"},
@@ -157,31 +183,36 @@ curl -X POST https://notification-system.test/api/v1/notifications/batch \
 ### Show a notification
 
 ```bash
-curl https://notification-system.test/api/v1/notifications/{id}
+curl -H 'X-Api-Key: local-development-key' \
+  https://notification-system.test/api/v1/notifications/{id}
 ```
 
 ### Cancel a notification
 
 ```bash
-curl -X POST https://notification-system.test/api/v1/notifications/{id}/cancel
+curl -X POST -H 'X-Api-Key: local-development-key' \
+  https://notification-system.test/api/v1/notifications/{id}/cancel
 ```
 
 ### List with filters
 
 ```bash
-curl 'https://notification-system.test/api/v1/notifications?status=failed&channel=sms&per_page=50'
+curl -H 'X-Api-Key: local-development-key' \
+  'https://notification-system.test/api/v1/notifications?status=failed&channel=sms&per_page=50'
 ```
 
 ### Metrics
 
 ```bash
-curl https://notification-system.test/api/v1/metrics | jq
+curl -H 'X-Api-Key: local-development-key' \
+  https://notification-system.test/api/v1/metrics | jq
 ```
 
 ### Health
 
 ```bash
-curl https://notification-system.test/api/v1/health
+curl -H 'X-Api-Key: local-development-key' \
+  https://notification-system.test/api/v1/health
 ```
 
 ---
@@ -211,19 +242,24 @@ php artisan test --compact --filter=Cancel # filter by test name
 - **Queue workers**: run one worker per priority tier in production for stricter isolation, e.g. `--queue=notifications-high` only.
 - **Scheduler**: the `notifications:dispatch-scheduled` command runs every minute and only queues notifications whose `scheduled_at` is now in the past.
 - **Idempotency keys** auto-expire after 24 h; `notifications:prune-idempotency` runs nightly at 03:00.
-- **`webhook.site` HTTP 429**: free tiers often throttle clients; configure the webhook to reply with **202** or **200** plus JSON `{ "messageId", "status":"accepted", "timestamp" }`. The worker **releases** jobs with backoff (honours `Retry-After` when present) instead of failing immediately. If you exhaust the capped number of consecutive 429s, the notification is marked **failed** — open a fresh inbox URL at webhook.site or wait for the quota window.
+- **`webhook.site` HTTP 429**: free tiers throttle aggressively. Configure your inbox to reply with `202` plus JSON `{"messageId":"…","status":"accepted","timestamp":"…"}` (see Quick start). When a 429 still occurs, the worker **re-dispatches a fresh delayed job** (honouring `Retry-After` when present) so rate-limit rounds do not consume Laravel's `$tries` budget. After `NOTIFICATION_PROVIDER_429_MAX_ROUNDS` consecutive 429s the notification is marked **failed** — rotate to a new inbox UUID or wait for the quota window.
 - **Switching to Redis**: change `QUEUE_CONNECTION=redis` and `CACHE_STORE=redis` after enabling the `redis` PHP extension (Docker image already installs it via `pecl install redis`).
+
+---
+
+## Security & sharing
+
+- **Never commit** your real `WEBHOOK_SITE_URL` or any production `NOTIFICATION_API_KEY`. `.env` is gitignored — keep secrets there.
+- A webhook.site inbox is publicly viewable to anyone who knows its UUID; treat the URL like a credential.
+- Rotate `NOTIFICATION_API_KEY` for any non-local deployment.
+- Before pushing, you can sanity-check committed UUIDs with:
+  ```bash
+  git grep -nE 'webhook\.site/[0-9a-f-]{36}'
+  ```
+  Every match should be the all-zeros placeholder (or your documented placeholder string), never a real UUID.
 
 ---
 
 ## Documentation
 
-- OpenAPI: `[docs/openapi.yaml](docs/openapi.yaml)`
-- Plan & decisions: `[PLAN.md](PLAN.md)`
-- Architecture rules for AI agents: `[AGENTS.md](AGENTS.md)`
-
----
-
-## License
-
-MIT.
+- OpenAPI spec: [`docs/openapi.yaml`](docs/openapi.yaml) — rendered Swagger UI at `/api/docs`.
