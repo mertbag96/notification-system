@@ -11,6 +11,7 @@ use App\Services\Providers\NotificationProvider;
 use App\Services\RateLimiterService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Queue;
 use Tests\TestCase;
 
 class SendNotificationJobTest extends TestCase
@@ -127,5 +128,39 @@ class SendNotificationJobTest extends TestCase
         $this->assertSame(429, $notification->attemptsLog()->first()->response_status);
         $this->assertStringContainsString('HTTP 429', (string) $notification->last_error);
         Http::assertSentCount(1);
+    }
+
+    public function test_http_429_redispatches_fresh_job_instead_of_consuming_tries(): void
+    {
+        Queue::fake();
+
+        Http::fake([
+            'webhook.site/*' => Http::response(
+                ['error' => 'Too Many Requests'],
+                429,
+                ['Retry-After' => '90'],
+            ),
+        ]);
+
+        config()->set('notifications.provider.http_429_max_rounds_per_notification', 20);
+        config()->set('notifications.provider.http_429_default_retry_seconds', 120);
+
+        $notification = Notification::factory()->queued()->create();
+
+        (new SendNotificationJob($notification->id))->handle(
+            app(NotificationProvider::class),
+            app(RateLimiterService::class),
+            app(CircuitBreaker::class),
+            app(MetricsCollector::class),
+        );
+
+        Queue::assertPushed(
+            SendNotificationJob::class,
+            function (SendNotificationJob $job) use ($notification): bool {
+                return $job->notificationId === $notification->id
+                    && $job->queue === $notification->priority->queueName()
+                    && $job->delay >= 90;
+            },
+        );
     }
 }

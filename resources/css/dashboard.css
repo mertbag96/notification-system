@@ -1,0 +1,163 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+    html {
+        font-family: 'Inter', ui-sans-serif, system-ui, sans-serif;
+        font-feature-settings: 'cv11', 'ss01', 'ss03';
+    }
+
+    body {
+        font-feature-settings: 'cv11', 'ss01', 'ss03';
+    }
+}
+
+@layer components {
+    .select {
+        @apply rounded-md border border-black/10 bg-white px-3 py-1.5 text-xs font-medium text-black hover:border-black/40 focus:outline-none focus:ring-1 focus:ring-black focus:border-black transition;
+    }
+
+    .btn-page {
+        @apply rounded-md border border-black/10 px-3 py-1.5 text-xs font-medium hover:border-black hover:bg-black hover:text-white transition disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-white disabled:hover:text-black disabled:hover:border-black/10;
+    }
+
+    .status-dot {
+        @apply inline-block h-2 w-2 rounded-full bg-black/30;
+    }
+
+    .status-dot--ok {
+        @apply bg-black;
+        box-shadow: 0 0 0 3px rgba(0, 0, 0, 0.08);
+    }
+
+    .status-dot--bad {
+        background-color: #000;
+        position: relative;
+    }
+
+    .status-dot--bad::after {
+        content: '';
+        position: absolute;
+        inset: -3px;
+        border-radius: 9999px;
+        border: 1px solid #000;
+        animation: pulse 1.6s ease-in-out infinite;
+    }
+
+    .status-dot--idle {
+        @apply bg-black/20;
+    }
+
+    .badge {
+        @apply inline-flex items-center gap-1.5 rounded-md border px-2 py-0.5 text-xs font-medium leading-none;
+    }
+
+    .badge--neutral {
+        @apply border-black/10 text-black/70;
+    }
+
+    .badge--solid {
+        @apply border-black bg-black text-white;
+    }
+
+    .badge--outline {
+        @apply border-black/40 text-black;
+    }
+}
+
+@layer utilities {
+    .nums {
+        font-variant-numeric: tabular-nums;
+    }
+}
+
+@keyframes pulse {
+    0% { transform: scale(1); opacity: 1; }
+    100% { transform: scale(1.6); opacity: 0; }
+}
+
+.drawer {
+    position: fixed;
+    inset: 0;
+    z-index: 50;
+    display: none;
+}
+
+.drawer[data-open='true'] {
+    display: block;
+}
+
+.drawer__backdrop {
+    position: absolute;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.4);
+    animation: fade-in 150ms ease-out;
+}
+
+.drawer__panel {
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: 100%;
+    max-width: 560px;
+    background: #fff;
+    display: flex;
+    flex-direction: column;
+    box-shadow: -16px 0 40px rgba(0, 0, 0, 0.08);
+    animation: slide-in 200ms ease-out;
+}
+
+@keyframes fade-in {
+    from { opacity: 0; }
+    to { opacity: 1; }
+}
+
+@keyframes slide-in {
+    from { transform: translateX(24px); opacity: 0; }
+    to { transform: translateX(0); opacity: 1; }
+}
+
+.kv {
+    display: grid;
+    grid-template-columns: 130px 1fr;
+    gap: 12px;
+    align-items: start;
+    font-size: 13px;
+    padding: 8px 0;
+    border-bottom: 1px solid rgba(0, 0, 0, 0.05);
+}
+
+.kv:last-child {
+    border-bottom: 0;
+}
+
+.kv__key {
+    color: rgba(0, 0, 0, 0.5);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    font-size: 11px;
+    font-weight: 500;
+    padding-top: 1px;
+}
+
+.kv__value {
+    color: #000;
+    word-break: break-word;
+    font-variant-numeric: tabular-nums;
+}
+
+.code-block {
+    background: #f7f7f7;
+    border: 1px solid rgba(0, 0, 0, 0.06);
+    border-radius: 6px;
+    padding: 12px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace;
+    font-size: 12px;
+    line-height: 1.5;
+    overflow-x: auto;
+    color: #111;
+    white-space: pre-wrap;
+    word-break: break-all;
+}

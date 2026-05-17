@@ -192,7 +192,13 @@ class SendNotificationJob implements ShouldQueue
                 'correlation_id' => $notification->correlation_id,
             ]);
 
-            $this->release($delay);
+            // Re-dispatch as a fresh delayed job instead of $this->release($delay).
+            // release() counts toward Laravel's $tries cap, which would dead-letter
+            // the notification after 5 rounds and defeat the per-notification 429
+            // round budget (`notifications.provider.http_429_max_rounds_per_notification`).
+            self::dispatch($notification->id)
+                ->onQueue($notification->priority->queueName())
+                ->delay($delay);
 
             return;
         }
